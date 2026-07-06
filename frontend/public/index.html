@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#FFFDF8" />
+    <meta name="description" content="PaperComic — Turn research papers into comic strips" />
+
+    <!-- Favicon (simple emoji fallback) -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>" />
+
+    <!-- Google Fonts — same as your landing page -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;700;800;900&family=Nunito:wght@400;600;700;800&family=Caveat:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <title>PaperComic</title>
+
+    <style>
+      /* Reset so React pages start clean */
+      *, *::before, *::after { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 0;
+        background: #FFFDF8;
+        font-family: 'Nunito', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      #root { min-height: 100vh; }
+
+      /* Scrollbar styling to match cream theme */
+      ::-webkit-scrollbar { width: 8px; }
+      ::-webkit-scrollbar-track { background: #F5F3EE; }
+      ::-webkit-scrollbar-thumb {
+        background: #CBB2FE;
+        border-radius: 4px;
+        border: 2px solid #F5F3EE;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run PaperComic.</noscript>
+    <div id="root"></div>
+    <!--
+      This is the CRA shell. React mounts into #root.
+      "/" redirects to /mf.html (your existing landing page in public/).
+      All other routes (/signin, /signup, /upload, etc.) are handled by App.js.
+    -->
+  </body>
+</html>
