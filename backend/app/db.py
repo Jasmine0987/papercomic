@@ -31,6 +31,7 @@ def _init_schema(conn):
     conn.execute("CREATE TABLE IF NOT EXISTS users (_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS comics (_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT, data TEXT NOT NULL)")
     conn.execute("CREATE TABLE IF NOT EXISTS contact (_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS webhook_logs (_id TEXT PRIMARY KEY, event_id TEXT UNIQUE, data TEXT NOT NULL)")
     conn.commit()
 
 
@@ -148,7 +149,7 @@ class _FindCursor:
         self._idx += 1
         return doc
 
-
 users_col = Collection("users")
 comics_col = Collection("comics", extra_cols=("user_id", "created_at"))
 contact_col = Collection("contact")
+webhook_logs_col = Collection("webhook_logs")  # Add this line

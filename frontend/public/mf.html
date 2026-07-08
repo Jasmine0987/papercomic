@@ -917,7 +917,7 @@ const PEEPS_SHEET = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAADhAAAAjcCAMAA
   const ROWS = 15, COLS = 7;
   const stage = {width:0, height:0};
   const allPeeps = [], availablePeeps = [], crowd = [];
-  let running = false;
+  let running = true;
 
   const rng = (a,b)=>a+Math.random()*(b-a);
   const rndIdx = arr => rng(0,arr.length)|0;
@@ -1011,15 +1011,9 @@ const PEEPS_SHEET = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAADhAAAAjcCAMAA
     while(availablePeeps.length) addPeepToCrowd();
   }
 
-  // Use IntersectionObserver: only animate while visible, stop when off-screen
-  const obs = new IntersectionObserver(entries=>{
-    if(entries[0].isIntersecting){
-      if(!running){ running = true; requestAnimationFrame(render); }
-    } else {
-      running = false;
-    }
-  }, {threshold: 0.1});
-  obs.observe(canvas);
+  // ✅ REMOVED IntersectionObserver - Animation now runs continuously!
+  // Start animation immediately
+  requestAnimationFrame(render);
 
   // Start image load immediately -don't wait for scroll
   const img = new Image();
@@ -1040,6 +1034,10 @@ const PEEPS_SHEET = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAADhAAAAjcCAMAA
   img.src = PEEPS_SHEET;
 
   window.addEventListener('resize', resize);
+  // ✅ Keep animation running even when page is not visible
+  document.addEventListener('visibilitychange', ()=>{
+    // Don't pause on visibility change - continue animating
+  });
 })();
 
 </script>

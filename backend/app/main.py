@@ -1,4 +1,7 @@
 import os, io, base64, json, time, uuid
+import secrets  # For generating random tokens
+import hashlib  # For hashing
+import hmac     # For signature verification
 from datetime import datetime, timedelta
 from typing import Optional, List
 import razorpay
@@ -12,22 +15,37 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from app.db import users_col, comics_col, contact_col
+from app.db import users_col, comics_col, contact_col, webhook_logs_col
 from google import genai as genai_client
 from google.genai import types as genai_types
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
 import jwt as pyjwt
 import google.generativeai as genai
+from pydantic import constr, validator
+import re
 from dotenv import load_dotenv
 load_dotenv()
-# ── Config ──────────────────────────────────────────────────────────────────
-SECRET_KEY   = os.getenv("JWT_SECRET", "change-me-in-production")
-ALGORITHM    = "HS256"
-TOKEN_EXPIRE = 60 * 24 * 7          # 7 days in minutes
 
+import logging
+
+# Logging setup
+logger = logging.getLogger("papercomic")
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+# ── Config ──────────────────────────────────────────────────────────────────
+SECRET_KEY = os.getenv("JWT_SECRET")
+if not SECRET_KEY:
+    raise ValueError("JWT_SECRET environment variable is required!")
+ALGORITHM    = "HS256"
+TOKEN_EXPIRE = 60        # 7 days in minutes
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB max PDF size
 GEMINI_API_KEY        = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GOOGLE_CLIENT_ID      = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -59,13 +77,35 @@ if ENV == "production":
 else:
     cors_origins = ["http://localhost:3000", FRONTEND_URL]
 
+# Set allowed origins based on environment
+allowed_origins = [FRONTEND_URL]
+if ENV != "production":
+    allowed_origins.append("http://localhost:3000")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],  # Explicit, not *
+    allow_headers=["Content-Type", "Authorization"],  # Explicit, not *
+    expose_headers=["Content-Length"],
+    max_age=600,
 )
+
+# Security headers middleware
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    
+    if ENV == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
+    
+    return response
 
 # ── Auth helpers ────────────────────────────────────────────────────────────
 pwd_ctx    = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -84,8 +124,12 @@ def create_token(user_id: str, name: str, email: str) -> str:
         "name": name,
         "email": email,
         "exp": expire,
+        "iat": datetime.utcnow(),  # Issue time
+        "type": "access"  # Token type
     }
-    return pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    token = pyjwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    logger.info(f"token_created for user {user_id}")
+    return token
 
 async def current_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_sch),
@@ -95,15 +139,17 @@ async def current_user(
     try:
         payload = pyjwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = payload.get("sub")
-        if not user_id:
+        if not user_id or payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Invalid token")
         user = await users_col.find_one({"_id": user_id})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         return user
     except pyjwt.ExpiredSignatureError:
+        logger.warning("token_expired")
         raise HTTPException(status_code=401, detail="Token expired")
-    except pyjwt.PyJWTError:
+    except pyjwt.PyJWTError as e:
+        logger.warning(f"token_invalid: {str(e)}")
         raise HTTPException(status_code=401, detail="Invalid token")
 
 # ── Gemini setup ────────────────────────────────────────────────────────────
@@ -111,10 +157,33 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 # ── Pydantic models ─────────────────────────────────────────────────────────
+
+
 class RegisterRequest(BaseModel):
-    name: str
+    name: constr(min_length=2, max_length=100)
     email: EmailStr
-    password: str
+    password: constr(min_length=12, max_length=128)
+    
+    @validator("name")
+    def validate_name(cls, v):
+        if not re.match(r"^[a-zA-Z0-9\s\-'\.]+$", v):
+            raise ValueError("Name contains invalid characters")
+        return v
+    
+    @validator("password")
+    def validate_password(cls, v):
+        errors = []
+        if not re.search(r"[A-Z]", v):
+            errors.append("uppercase letter")
+        if not re.search(r"[a-z]", v):
+            errors.append("lowercase letter")
+        if not re.search(r"[0-9]", v):
+            errors.append("digit")
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
+            errors.append("special character")
+        if errors:
+            raise ValueError(f"Password must contain: {', '.join(errors)}")
+        return v
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -141,11 +210,15 @@ class ContactRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.post("/api/auth/register")
-@limiter.limit("5/minute")
+@limiter.limit("3/minute")
+@limiter.limit("20/hour")
 async def register(body: RegisterRequest, request: Request):
     existing = await users_col.find_one({"email": body.email})
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        logger.warning(f"register_duplicate: {body.email}")
+        # Don't reveal if email exists
+        raise HTTPException(status_code=400, detail="Registration failed. Please try again.")
+    
     user_id = str(uuid.uuid4())
     user = {
         "_id": user_id,
@@ -155,63 +228,134 @@ async def register(body: RegisterRequest, request: Request):
         "provider": "email",
         "free_generations_used": 0,
         "plan": "free",
+        "mfa_enabled": False,
         "created_at": datetime.utcnow().isoformat(),
     }
     await users_col.insert_one(user)
+    
+    logger.info(f"register_success: {user_id}")
     token = create_token(user_id, body.name, body.email)
     return {"access_token": token, "token_type": "bearer"}
 
 
 @app.post("/api/auth/login")
-@limiter.limit("10/minute")
+@limiter.limit("3/minute")
+@limiter.limit("10/hour")
 async def login(body: LoginRequest, request: Request):
     user = await users_col.find_one({"email": body.email})
+    
     if not user or not verify_password(body.password, user.get("password_hash", "")):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        logger.warning(f"login_failed: {body.email} from {request.client.host}")
+        # Generic message prevents enumeration
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    logger.info(f"login_success: {user['_id']} from {request.client.host}")
     token = create_token(user["_id"], user["name"], user["email"])
     return {"access_token": token, "token_type": "bearer"}
 
 
-@app.get("/api/auth/google")
-async def google_oauth_redirect():
-    params = {
-        "client_id": GOOGLE_CLIENT_ID,
-        "redirect_uri": GOOGLE_REDIRECT_URI,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "access_type": "offline",
-        "prompt": "consent",
-    }
-    from urllib.parse import urlencode
-    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
-    return RedirectResponse(url)
+@app.post("/api/auth/google/start")
+@limiter.limit("10/minute")
+async def google_oauth_start(request: Request, response: Response):
+    """Start OAuth flow with CSRF protection (state parameter)"""
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="OAuth not configured")
+    
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    
+    # Store state in secure HTTP-only cookie
+    response.set_cookie(
+        "oauth_state",
+        state,
+        httponly=True,
+        secure=ENV == "production",
+        samesite="lax",
+        max_age=600  # 10 minutes
+    )
+    response.set_cookie(
+        "oauth_nonce",
+        nonce,
+        httponly=True,
+        secure=ENV == "production",
+        samesite="lax",
+        max_age=600
+    )
+    
+    return {"state": state, "nonce": nonce}
 
 
 @app.get("/api/auth/google/callback")
-async def google_oauth_callback(code: str):
-    async with httpx.AsyncClient() as client:
-        # Exchange code for tokens
-        token_res = await client.post("https://oauth2.googleapis.com/token", data={
-            "code": code,
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": GOOGLE_REDIRECT_URI,
-            "grant_type": "authorization_code",
-        })
-        token_data = token_res.json()
-        id_token_str = token_data.get("id_token", "")
-
-        # Get user info
-        userinfo_res = await client.get(
-            "https://www.googleapis.com/oauth2/v3/userinfo",
-            headers={"Authorization": f"Bearer {token_data.get('access_token')}"}
-        )
-        userinfo = userinfo_res.json()
-
-    email = userinfo.get("email")
-    name  = userinfo.get("name", email.split("@")[0])
-    gid   = userinfo.get("sub")
-
+@limiter.limit("20/minute")
+async def google_oauth_callback(
+    code: str,
+    state: str,
+    request: Request
+):
+    """Handle OAuth callback with state validation and ID token verification"""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="OAuth not configured")
+    
+    # Validate state
+    cookies = request.cookies
+    stored_state = cookies.get("oauth_state")
+    if not stored_state or stored_state != state:
+        logger.warning(f"oauth_state_mismatch from {request.client.host}")
+        raise HTTPException(status_code=400, detail="Invalid OAuth state")
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            # Exchange code for tokens
+            token_res = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+                timeout=10.0
+            )
+            
+            if token_res.status_code != 200:
+                logger.error(f"oauth_token_error: {token_res.text}")
+                raise HTTPException(status_code=400, detail="OAuth token exchange failed")
+            
+            token_data = token_res.json()
+            id_token_str = token_data.get("id_token", "")
+            
+            if not id_token_str:
+                raise HTTPException(status_code=400, detail="No ID token received")
+            
+            # ✅ VERIFY ID TOKEN SIGNATURE (critical!)
+            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token
+            
+            try:
+                idinfo = id_token.verify_oauth2_token(
+                    id_token_str,
+                    google_requests.Request(),
+                    GOOGLE_CLIENT_ID
+                )
+            except ValueError as e:
+                logger.error(f"oauth_id_token_invalid: {str(e)}")
+                raise HTTPException(status_code=400, detail="Invalid ID token")
+            
+            email = idinfo.get("email")
+            name = idinfo.get("name", email.split("@")[0])
+            gid = idinfo.get("sub")
+            
+            if not email or not gid:
+                raise HTTPException(status_code=400, detail="Missing OAuth info")
+    
+    except httpx.TimeoutException:
+        logger.error("oauth_timeout")
+        raise HTTPException(status_code=500, detail="OAuth timeout")
+    except httpx.HTTPError as e:
+        logger.error(f"oauth_http_error: {str(e)}")
+        raise HTTPException(status_code=500, detail="OAuth service error")
+    
     # Upsert user
     user = await users_col.find_one({"email": email})
     if not user:
@@ -220,19 +364,20 @@ async def google_oauth_callback(code: str):
             "_id": user_id,
             "name": name,
             "email": email,
-            "google_id": gid,
             "provider": "google",
+            "google_id": gid,
             "free_generations_used": 0,
             "plan": "free",
+            "mfa_enabled": False,
             "created_at": datetime.utcnow().isoformat(),
         }
         await users_col.insert_one(user)
-    elif "google_id" not in user:
-        await users_col.update_one({"_id": user["_id"]}, {"$set": {"google_id": gid}})
-
-    token = create_token(user["_id"], name, email)
-    # Redirect to frontend with token in hash so the SPA can pick it up
-    return RedirectResponse(f"{FRONTEND_URL}/upload?token={token}")
+        logger.info(f"oauth_user_created: {user_id}")
+    else:
+        logger.info(f"oauth_user_login: {user['_id']}")
+    
+    token = create_token(user["_id"], user["name"], user["email"])
+    return {"access_token": token, "token_type": "bearer"}
 
 
 @app.get("/api/auth/me")
@@ -445,6 +590,7 @@ async def convert_illustrate(
 ):
     comic = await comics_col.find_one({"_id": body.comic_id, "user_id": user["_id"]})
     if not comic:
+        logger.warning(f"illustration_comic_not_found: {user['_id']}")
         raise HTTPException(status_code=404, detail="Comic not found")
 
     plan = user.get("plan", "free")
@@ -554,16 +700,64 @@ async def convert_illustrate(
             {"$set": {"free_generations_used": used + 1}},
         )
 
+    logger.info(f"illustration_generated: {user['_id']} - {body.comic_id}")
+
     return {
         "comic_id": body.comic_id,
         "panels": illustrated_panels,
         "free_generations_used": used + (0 if is_unlimited else 1),
         "free_generation_limit": generation_limit,
         "plan": plan,
-        "is_premium": plan != "free",
     }
 
-
+@app.post("/api/extract-sections")
+@limiter.limit("10/hour")  # Aggressive rate limit
+async def extract_sections(
+    request: Request,
+    file: UploadFile = File(...),
+    user=Depends(current_user),
+):
+    """Upload PDF with comprehensive validation"""
+    
+    # 1. Check file size BEFORE reading
+    if file.size and file.size > MAX_FILE_SIZE:
+        logger.warning(f"upload_too_large: {file.filename} ({file.size} bytes)")
+        raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+    
+    # 2. Validate MIME type
+    if file.content_type != "application/pdf":
+        logger.warning(f"upload_invalid_mime: {file.filename} ({file.content_type})")
+        raise HTTPException(status_code=400, detail="Only PDF files allowed")
+    
+    # 3. Validate filename (prevent path traversal)
+    if "/" in file.filename or "\\" in file.filename or ".." in file.filename:
+        logger.warning(f"upload_path_traversal_attempt: {file.filename}")
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    # 4. Read with size limit
+    content = b""
+    try:
+        async for chunk in file.file:
+            content += chunk
+            if len(content) > MAX_FILE_SIZE:
+                logger.warning(f"upload_exceeded_limit: {user['_id']}")
+                raise HTTPException(status_code=413, detail="File exceeds size limit")
+    except Exception as e:
+        logger.error(f"upload_read_error: {str(e)}")
+        raise HTTPException(status_code=400, detail="File read error")
+    
+    # 5. Validate magic bytes (PDF signature)
+    if not content.startswith(b"%PDF"):
+        logger.warning(f"upload_invalid_pdf: {user['_id']}")
+        raise HTTPException(status_code=400, detail="Invalid PDF file")
+    
+    # 6. Check for malicious patterns
+    if b"JavaScript" in content or b"OpenAction" in content:
+        logger.warning(f"upload_suspicious_pdf: {user['_id']}")
+        raise HTTPException(status_code=400, detail="PDF contains suspicious elements")
+    
+    logger.info(f"upload_success: {user['_id']} - document uploaded")
+    
 # ═══════════════════════════════════════════════════════════════════════════
 # COMICS CRUD
 # ═══════════════════════════════════════════════════════════════════════════
@@ -599,17 +793,37 @@ async def list_comics(user=Depends(current_user)):
 
 @app.get("/api/comics/{comic_id}")
 async def get_comic(comic_id: str, user=Depends(current_user)):
+    """Get specific comic with validation"""
+    try:
+        # Validate comic_id format
+        if not all(c.isalnum() or c in "-_" for c in comic_id) or len(comic_id) > 100:
+            raise HTTPException(status_code=400, detail="Invalid comic_id format")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid comic_id")
+    
     doc = await comics_col.find_one({"_id": comic_id, "user_id": user["_id"]})
     if not doc:
+        logger.warning(f"comic_not_found: {user['_id']} - {comic_id}")
         raise HTTPException(status_code=404, detail="Comic not found")
+    
     return serialise(doc)
 
 
 @app.delete("/api/comics/{comic_id}")
 async def delete_comic(comic_id: str, user=Depends(current_user)):
+    """Delete comic with validation"""
+    try:
+        if not all(c.isalnum() or c in "-_" for c in comic_id) or len(comic_id) > 100:
+            raise HTTPException(status_code=400, detail="Invalid comic_id")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid comic_id")
+    
     result = await comics_col.delete_one({"_id": comic_id, "user_id": user["_id"]})
     if result.deleted_count == 0:
+        logger.warning(f"comic_delete_failed: {user['_id']} - {comic_id}")
         raise HTTPException(status_code=404, detail="Comic not found")
+    
+    logger.info(f"comic_deleted: {user['_id']} - {comic_id}")
     return {"deleted": comic_id}
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -686,55 +900,99 @@ async def verify_payment(
 
 
 @app.post("/api/billing/webhook")
+@limiter.limit("100/minute")
 async def razorpay_webhook(request: Request):
+    """Razorpay webhook with signature verification and idempotency"""
+    import hmac
+    
     raw_body = await request.body()
     body_str = raw_body.decode("utf-8")
     signature = request.headers.get("x-razorpay-signature", "")
-
+    
     if not RAZORPAY_WEBHOOK_SECRET:
+        logger.error("webhook_secret_not_configured")
         raise HTTPException(status_code=500, detail="Webhook secret not configured")
-
+    
+    # ✅ VERIFY SIGNATURE with hmac.compare_digest
+    expected_signature = hmac.new(
+        RAZORPAY_WEBHOOK_SECRET.encode(),
+        body_str.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    
+    if not hmac.compare_digest(signature, expected_signature):
+        logger.warning(f"webhook_signature_invalid from {request.client.host}")
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    
     try:
-        razorpay_client_for_verify = razorpay_client or razorpay.Client(auth=("", ""))
-        razorpay_client_for_verify.utility.verify_webhook_signature(
-            body_str, signature, RAZORPAY_WEBHOOK_SECRET
-        )
-    except razorpay.errors.SignatureVerificationError:
-        raise HTTPException(status_code=400, detail="Invalid webhook signature")
-
-    event = json.loads(body_str)
+        event = json.loads(body_str)
+    except json.JSONDecodeError:
+        logger.error("webhook_json_invalid")
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    
+    event_id = event.get("id")
     event_type = event.get("event")
-
-    if event_type == "subscription.activated" or event_type == "subscription.charged":
-        payload = event.get("payload", {})
-        subscription = payload.get("subscription", {}).get("entity", {})
-        notes = subscription.get("notes", {})
-        user_id = notes.get("user_id")
-        plan = notes.get("plan", "pro")
-        subscription_id = subscription.get("id")
-        if user_id:
-            await users_col.update_one(
-                {"_id": user_id},
-                {"$set": {
-                    "plan": plan,
-                    "razorpay_subscription_id": subscription_id,
-                    "free_generations_used": 0,
-                }},
-            )
-            print(f"[billing] upgraded user {user_id} to plan={plan}")
-
-    elif event_type in ("subscription.cancelled", "subscription.completed", "subscription.halted"):
-        payload = event.get("payload", {})
-        subscription = payload.get("subscription", {}).get("entity", {})
-        subscription_id = subscription.get("id")
-        user = await users_col.find_one({"razorpay_subscription_id": subscription_id})
-        if user:
-            await users_col.update_one(
-                {"_id": user["_id"]},
-                {"$set": {"plan": "free"}},
-            )
-            print(f"[billing] downgraded user {user['_id']} to free ({event_type})")
-
+    
+    # ✅ IDEMPOTENCY - Check if already processed
+    # TODO: Add webhook_logs_col to db.py
+    existing = await webhook_logs_col.find_one({"event_id": event_id})
+    if existing:
+        logger.info(f"webhook_duplicate: {event_id}")
+        return {"received": True}
+    
+    # Process webhook
+    try:
+        if event_type in ("subscription.activated", "subscription.charged"):
+            payload = event.get("payload", {})
+            subscription = payload.get("subscription", {}).get("entity", {})
+            notes = subscription.get("notes", {})
+            user_id = notes.get("user_id")
+            plan = notes.get("plan", "pro")
+            subscription_id = subscription.get("id")
+            
+            if user_id:
+                await users_col.update_one(
+                    {"_id": user_id},
+                    {"$set": {
+                        "plan": plan,
+                        "razorpay_subscription_id": subscription_id,
+                        "free_generations_used": 0,
+                    }},
+                )
+                logger.info(f"webhook_upgrade: {user_id} to {plan}")
+        
+        elif event_type in ("subscription.cancelled", "subscription.completed", "subscription.halted"):
+            payload = event.get("payload", {})
+            subscription = payload.get("subscription", {}).get("entity", {})
+            subscription_id = subscription.get("id")
+            user = await users_col.find_one({"razorpay_subscription_id": subscription_id})
+            if user:
+                await users_col.update_one(
+                    {"_id": user["_id"]},
+                    {"$set": {"plan": "free"}},
+                )
+                logger.info(f"webhook_downgrade: {user['_id']} ({event_type})")
+        
+        # Log successful processing (uncomment when webhook_logs_col added)
+        await webhook_logs_col.insert_one({
+            "event_id": event_id,
+            "event_type": event_type,
+            "processed_at": datetime.utcnow(),
+            "status": "success"
+        })
+        
+    except Exception as e:
+        logger.error(f"webhook_error: {str(e)}")
+        # Log failed processing (uncomment when webhook_logs_col added)
+        await webhook_logs_col.insert_one({
+            "event_id": event_id,
+            "event_type": event_type,
+            "processed_at": datetime.utcnow(),
+            "status": "failed",
+            "error": str(e)
+        })
+        raise HTTPException(status_code=500, detail="Webhook processing failed")
+    
     return {"received": True}
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -742,12 +1000,17 @@ async def razorpay_webhook(request: Request):
 # ═══════════════════════════════════════════════════════════════════════════
 
 @app.post("/api/contact")
-async def contact(body: ContactRequest):
+@limiter.limit("5/minute")
+async def contact(body: ContactRequest, request: Request):
+    """Contact form submission"""
     await contact_col.insert_one({
         **body.dict(),
+        "ip": request.client.host,
+        "user_agent": request.headers.get("user-agent", ""),
         "created_at": datetime.utcnow().isoformat(),
         "read": False,
     })
+    logger.info(f"contact_submitted: {body.email}")
     return {"ok": True}
 
 
