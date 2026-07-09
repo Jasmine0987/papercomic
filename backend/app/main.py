@@ -75,12 +75,12 @@ ENV = os.getenv("ENV", "development")
 if ENV == "production":
     cors_origins = [FRONTEND_URL]
 else:
-    cors_origins = ["http://localhost:3000", FRONTEND_URL]
+    cors_origins = ["https://papercomicw.vercel.app", FRONTEND_URL]
 
 # Set allowed origins based on environment
 allowed_origins = [FRONTEND_URL]
 if ENV != "production":
-    allowed_origins.append("http://localhost:3000")
+    allowed_origins.append("https://papercomicw.vercel.app")
 
 app.add_middleware(
     CORSMiddleware,
