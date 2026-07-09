@@ -5,33 +5,32 @@ export default function OAuthCallback({ onNavigate }) {
     const processCallback = async () => {
       const params = new URLSearchParams(window.location.search);
       const code = params.get("code");
-      const state = params.get("state");
       
       if (!code) {
-        alert("OAuth failed: no code received");
-        window.location.href = "/signup";
+        alert("OAuth failed");
+        onNavigate("/signup");
         return;
       }
       
       try {
-        const res = await fetch("https://papercomic-api.onrender.com/api/auth/google/callback", {
+        const res = await fetch("https://papercomic-api.onrender.com/api/auth/google/callback?" + params, {
           method: "GET",
-          credentials: "include",  // Include cookies for state validation
+          credentials: "include",
         });
         
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "OAuth failed");
+        if (!res.ok) throw new Error(data.detail);
         
         localStorage.setItem("pc_token", data.access_token);
         onNavigate("/upload");
       } catch (err) {
-        alert(`OAuth error: ${err.message}`);
-        window.location.href = "/signup";
+        alert("OAuth error: " + err.message);
+        onNavigate("/signup");
       }
     };
     
     processCallback();
   }, [onNavigate]);
   
-  return <div>Logging in...</div>;
+  return <div style={{ textAlign: "center", padding: "40px", fontSize: "18px" }}>Logging in...</div>;
 }
