@@ -13,6 +13,7 @@ import LibraryPage from "./pages/library/LibraryPage";
 import ReaderPage  from "./pages/reader/ReaderPage";
 import PricingPage from "./pages/pricing/PricingPage";
 import AboutPage   from "./pages/about/AboutPage";
+import OAuthCallback from "./pages/auth/OAuthCallback";
 
 // ── Router ──────────────────────────────────────────────────────────────────
 function usePath() {
@@ -103,6 +104,7 @@ export default function App() {
     { pattern: "/signup",      el: () => <SignUp  onNavigate={navigate} /> },
     { pattern: "/pricing",     el: () => <PricingPage /> },
     { pattern: "/about",       el: () => <AboutPage /> },
+    { pattern: "/auth/callback", el: () => <OAuthCallback onNavigate={navigate} /> },
     {
       pattern: "/upload",
       el: () => (

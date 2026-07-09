@@ -84,8 +84,32 @@ export default function SignUp({ onNavigate }) {
     }
   };
 
-  const handleGoogle = () => {
-    window.location.href = "http://localhost:8000/api/auth/google";
+  const handleGoogle = async () => {
+    try {
+      const API_BASE = "https://papercomic-api.onrender.com";
+    
+      // Get state from backend
+      const res = await fetch(`${API_BASE}/api/auth/google/start`, {
+        method: "POST",
+      });
+      const { state } = await res.json();
+    
+      // Build Google OAuth URL
+      const params = new URLSearchParams({
+        client_id: process.env.GOOGLE_CLIENT_ID,
+        redirect_uri: `${window.location.origin}/auth/callback`,
+        response_type: "code",
+        scope: "openid email profile",
+        state: state,
+        access_type: "offline",
+        prompt: "consent",
+      });
+    
+      window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+    } catch (err) {
+      console.error("OAuth start failed:", err);
+      alert("Failed to start Google login");
+    }
   };
 
   if (success) {
