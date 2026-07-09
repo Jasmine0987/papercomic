@@ -61,7 +61,10 @@ export default function SignIn({ onNavigate }) {
         body: JSON.stringify(form),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Login failed");
+      if (!res.ok) {
+        console.error("Login error:", data);
+        throw new Error(data.detail || data.message || JSON.stringify(data));
+      }
       localStorage.setItem("pc_token", data.access_token);
       // navigate to upload/dashboard
       if (onNavigate) onNavigate("/upload");

@@ -40,7 +40,11 @@ const PERKS = [
 ];
 
 function validatePassword(pw) {
-  return pw.length >= 8;
+  const hasUpper = /[A-Z]/.test(pw);
+  const hasLower = /[a-z]/.test(pw);
+  const hasDigit = /[0-9]/.test(pw);
+  const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(pw);
+  return pw.length >= 12 && hasUpper && hasLower && hasDigit && hasSpecial;
 }
 
 export default function SignUp({ onNavigate }) {
@@ -62,7 +66,7 @@ export default function SignUp({ onNavigate }) {
       return;
     }
     if (!validatePassword(form.password)) {
-      setError("Password must be at least 8 characters.");
+      setError("Password must be 12+ chars with uppercase, lowercase, number, and special character (!@#$%^&*)");
       return;
     }
     setIsLoading(true);
@@ -73,7 +77,10 @@ export default function SignUp({ onNavigate }) {
         body: JSON.stringify({ name: form.name, email: form.email, password: form.password }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Registration failed");
+      if (!res.ok) {
+        console.error("Registration error:", data);
+        throw new Error(data.detail || data.message || JSON.stringify(data));
+      }
       localStorage.setItem("pc_token", data.access_token);
       setSuccess(true);
       setTimeout(() => { if (onNavigate) onNavigate("/upload"); }, 1200);
