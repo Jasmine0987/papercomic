@@ -103,7 +103,7 @@ export default function SignUp({ onNavigate }) {
     
       // Build Google OAuth URL
       const params = new URLSearchParams({
-        client_id: process.env.GOOGLE_CLIENT_ID,
+        client_id: process.env.REACT_APP_GOOGLE_CLIENT_ID,
         redirect_uri: `${window.location.origin}/auth/callback`,
         response_type: "code",
         scope: "openid email profile",
