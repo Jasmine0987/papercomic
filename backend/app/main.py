@@ -91,7 +91,17 @@ app.add_middleware(
     expose_headers=["Content-Length"],
     max_age=600,
 )
-
+@app.get("/api/debug/cors")
+async def debug_cors():
+    """Debug endpoint to check CORS config"""
+    return {
+        "FRONTEND_URL": os.getenv("FRONTEND_URL"),
+        "ENV": os.getenv("ENV"),
+        "CORS_ALLOWED_ORIGINS": [
+            os.getenv("FRONTEND_URL", "http://localhost:3000"),
+            "http://localhost:3000"
+        ]
+    }
 # Security headers middleware
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
