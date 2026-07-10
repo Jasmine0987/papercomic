@@ -81,6 +81,20 @@ else:
 allowed_origins = [FRONTEND_URL]
 if ENV != "production":
     allowed_origins.append("https://papercomicw.vercel.app")
+    
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    
+    if ENV == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+    
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
+    
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -103,19 +117,6 @@ async def debug_cors():
         ]
     }
 # Security headers middleware
-@app.middleware("http")
-async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
-    
-    if ENV == "production":
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-    
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
-    
-    return response
 
 # ── Auth helpers ────────────────────────────────────────────────────────────
 pwd_ctx    = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -279,16 +280,16 @@ async def google_oauth_start(request: Request, response: Response):
         "oauth_state",
         state,
         httponly=True,
-        secure=ENV == "production",
-        samesite="lax",
+        secure=True,
+        samesite="none",
         max_age=600  # 10 minutes
     )
     response.set_cookie(
         "oauth_nonce",
         nonce,
         httponly=True,
-        secure=ENV == "production",
-        samesite="lax",
+        secure=True,
+        samesite="none",
         max_age=600
     )
     
