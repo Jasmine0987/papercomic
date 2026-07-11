@@ -19,7 +19,8 @@ google-genai==0.3.0
 ollama==0.3.3
 
 # Auth
-passlib[bcrypt]==1.7.4
+passlib==1.7.4
+bcrypt==4.0.1
 pyjwt==2.9.0
 
 # Rate limiting

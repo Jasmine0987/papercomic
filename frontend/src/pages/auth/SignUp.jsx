@@ -98,6 +98,7 @@ export default function SignUp({ onNavigate }) {
       // Get state from backend
       const res = await fetch(`${API_BASE}/api/auth/google/start`, {
         method: "POST",
+        credentials: "include",
       });
       const { state } = await res.json();
     
