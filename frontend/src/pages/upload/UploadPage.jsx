@@ -155,9 +155,9 @@ export default function UploadPage({ user, onNavigate }) {
     const token = localStorage.getItem("pc_token");
     if (!token) return;
     try {
-      const res = await fetch("/api/auth/me", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(`${process.env.REACT_APP_API_BASE}/api/auth/me`, {
+         headers: { Authorization: `Bearer ${token}` },
+       });
       if (res.ok) {
         const data = await res.json();
         setUsage(data);
@@ -210,7 +210,7 @@ export default function UploadPage({ user, onNavigate }) {
     formData.append("language", options.language);
 
     setStage(STAGES.SCRIPTING);
-    const scriptRes = await fetch("/api/convert/script", {
+    const scriptRes = await fetch(`${process.env.REACT_APP_API_BASE}/api/convert/script`, {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: formData,
@@ -222,7 +222,7 @@ export default function UploadPage({ user, onNavigate }) {
     const scriptData = await scriptRes.json();
 
     setStage(STAGES.ILLUSTRATING);
-    const illustrateRes = await fetch("/api/convert/illustrate", {
+    const illustrateRes = await fetch(`${process.env.REACT_APP_API_BASE}/api/convert/illustrate`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -258,7 +258,7 @@ export default function UploadPage({ user, onNavigate }) {
     formData.append("file", file);
 
     setStage(STAGES.OUTLINING);
-    const res = await fetch("/api/convert/outline", {
+    const res = await fetch(`${process.env.REACT_APP_API_BASE}/api/convert/outline`, {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       body: formData,
@@ -294,7 +294,7 @@ export default function UploadPage({ user, onNavigate }) {
         formData.append("topic_summary", topic.summary);
         formData.append("source_id", sourceId || "");
 
-        const scriptRes = await fetch("/api/convert/script", {
+        const scriptRes = await fetch(`${process.env.REACT_APP_API_BASE}/api/convert/script`, {
           method: "POST",
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           body: formData,
@@ -306,7 +306,7 @@ export default function UploadPage({ user, onNavigate }) {
         const scriptData = await scriptRes.json();
 
         setStage(STAGES.ILLUSTRATING);
-        const illustrateRes = await fetch("/api/convert/illustrate", {
+        const illustrateRes = await fetch(`${process.env.REACT_APP_API_BASE}/api/convert/illustrate`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

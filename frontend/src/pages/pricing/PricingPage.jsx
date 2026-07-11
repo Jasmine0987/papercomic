@@ -311,8 +311,8 @@ export default function PricingPage() {
   useEffect(() => {
     const token = localStorage.getItem("pc_token");
     if (!token) return;
-    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
-      .then((res) => (res.ok ? res.json() : null))
+    fetch(`${process.env.REACT_APP_API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
+       .then((res) => (res.ok ? res.json() : null))
       .then((data) => data && setUsage(data))
       .catch(() => {});
   }, []);
@@ -339,7 +339,7 @@ export default function PricingPage() {
         throw new Error("Could not load the payment widget. Check your connection and try again.");
       }
 
-      const subRes = await fetch("/api/billing/create-subscription", {
+      const subRes = await fetch(`${process.env.REACT_APP_API_BASE}/api/billing/create-subscription`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -361,7 +361,7 @@ export default function PricingPage() {
         prefill: { email: usage?.email || "" },
         handler: async (response) => {
           try {
-            const verifyRes = await fetch("/api/billing/verify", {
+            const verifyRes = await fetch(`${process.env.REACT_APP_API_BASE}/api/billing/verify`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -378,7 +378,7 @@ export default function PricingPage() {
               // Refresh usage -note: the durable plan flip happens via the
               // webhook server-side, so this may briefly still show "free"
               // until the webhook lands. We optimistically refetch once.
-              const meRes = await fetch("/api/auth/me", {
+              const meRes = await fetch(`${process.env.REACT_APP_API_BASE}/api/auth/me`, {
                 headers: { Authorization: `Bearer ${token}` },
               });
               if (meRes.ok) setUsage(await meRes.json());

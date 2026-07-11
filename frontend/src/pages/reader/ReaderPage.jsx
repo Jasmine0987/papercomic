@@ -123,7 +123,7 @@ export default function ReaderPage({ comicId, user }) {
     const fetchComic = async () => {
       const token = localStorage.getItem("pc_token");
       try {
-        const res = await fetch(`/api/comics/${comicId}`, {
+        const res = await fetch(`${process.env.REACT_APP_API_BASE}/api/comics/${comicId}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) throw new Error("Comic not found");

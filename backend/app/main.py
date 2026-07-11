@@ -25,7 +25,7 @@ from passlib.context import CryptContext
 import jwt as pyjwt
 import google.generativeai as genai
 from pydantic import constr, validator
-import re
+import reimport time
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -272,26 +272,11 @@ async def google_oauth_start(request: Request, response: Response):
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="OAuth not configured")
     
-    state = secrets.token_urlsafe(32)
-    nonce = secrets.token_urlsafe(32)
-    
-    # Store state in secure HTTP-only cookie
-    response.set_cookie(
-        "oauth_state",
-        state,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=600  # 10 minutes
-    )
-    response.set_cookie(
-        "oauth_nonce",
-        nonce,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=600
-    )
+    ts = str(int(time.time()))
+    nonce = secrets.token_urlsafe(16)
+    payload = f"{ts}.{nonce}"
+    sig = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    state = f"{payload}.{sig}"
     
     return {"state": state, "nonce": nonce}
 
@@ -307,11 +292,17 @@ async def google_oauth_callback(
     if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
         raise HTTPException(status_code=500, detail="OAuth not configured")
     
-    # Validate state
-    cookies = request.cookies
-    stored_state = cookies.get("oauth_state")
-    if not stored_state or stored_state != state:
-        logger.warning(f"oauth_state_mismatch from {request.client.host}")
+    # Validate signed, self-contained state (no cookie needed)
+    try:
+        ts_str, nonce, sig = state.split(".")
+        payload = f"{ts_str}.{nonce}"
+        expected_sig = hmac.new(SECRET_KEY.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            raise ValueError("bad signature")
+        if time.time() - int(ts_str) > 600:
+            raise ValueError("expired")
+    except Exception:
+        logger.warning(f"oauth_state_invalid from {request.client.host}")
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
     
     try:

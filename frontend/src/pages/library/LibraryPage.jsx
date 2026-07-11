@@ -340,7 +340,7 @@ export default function LibraryPage({ user }) {
     const fetchComics = async () => {
       const token = localStorage.getItem("pc_token");
       try {
-        const res = await fetch("/api/comics", {
+        const res = await fetch(`${process.env.REACT_APP_API_BASE}/api/comics`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) throw new Error("Failed to load library");
@@ -358,7 +358,7 @@ export default function LibraryPage({ user }) {
   const handleDelete = async (id) => {
     const token = localStorage.getItem("pc_token");
     try {
-      await fetch(`/api/comics/${id}`, {
+      await fetch(`${process.env.REACT_APP_API_BASE}/api/comics/${id}`, {
         method: "DELETE",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });

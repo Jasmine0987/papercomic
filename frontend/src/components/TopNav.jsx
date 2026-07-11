@@ -11,7 +11,7 @@ export default function TopNav({ user: userProp, usage: usageProp }) {
     if (userProp && usageProp) return;
     const token = localStorage.getItem("pc_token");
     if (!token) return;
-    fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${process.env.REACT_APP_API_BASE}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data) {
