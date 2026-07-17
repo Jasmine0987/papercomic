@@ -424,7 +424,27 @@ Return ONLY a JSON array (no markdown, no preamble) of topic objects, each with:
 Identify between 3 and 8 major topics depending on the document's length and structure.
 Order them in the same sequence they appear in the document."""
 
+def _parse_llm_json(raw: str):
+    """Robustly parse a JSON array/object out of an LLM response.
 
+    Tolerates markdown code fences and the occasional trailing comma
+    that models sometimes emit even when told to return raw JSON.
+    """
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1]
+            if text.startswith("json"):
+                text = text[4:]
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        # Common LLM slip: trailing comma before a closing ] or }
+        repaired = re.sub(r",\s*([\]}])", r"\1", text)
+        return json.loads(repaired)
+    
 @app.post("/api/convert/outline")
 @limiter.limit("10/hour")
 async def convert_outline(
@@ -453,17 +473,16 @@ async def convert_outline(
     try:
         b64_pdf = base64.b64encode(pdf_bytes).decode()
         model = genai.GenerativeModel(GEMINI_MODEL)
-        response = model.generate_content([
-            OUTLINE_SYSTEM_PROMPT,
-            {"mime_type": "application/pdf", "data": b64_pdf},
-        ])
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        topics = json.loads(raw)
+        response = model.generate_content(
+            [
+                OUTLINE_SYSTEM_PROMPT,
+                {"mime_type": "application/pdf", "data": b64_pdf},
+            ],
+            generation_config=genai.GenerationConfig(response_mime_type="application/json"),
+        )
+        topics = _parse_llm_json(response.text)
     except Exception as e:
+        logger.error(f"Outline generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Outline generation failed: {str(e)}")
 
     return {
@@ -548,17 +567,16 @@ async def convert_script(
             f"{topic_scope}\n\n"
             "Here is the PDF content:"
         )
-        response = model.generate_content([
-            prompt,
-            {"mime_type": "application/pdf", "data": b64_pdf},
-        ])
-        raw = response.text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        panels = json.loads(raw)
+        response = model.generate_content(
+            [
+                prompt,
+                {"mime_type": "application/pdf", "data": b64_pdf},
+            ],
+            generation_config=genai.GenerationConfig(response_mime_type="application/json"),
+        )
+        panels = _parse_llm_json(response.text)
     except Exception as e:
+        logger.error(f"Script generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Script generation failed: {str(e)}")
 
     comic_id = str(uuid.uuid4())
